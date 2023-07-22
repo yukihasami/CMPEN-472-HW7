@@ -1,0 +1,746 @@
+
+***********************************************************************
+*
+* Title:          SCI Serial Port and 7-segment Display at PORTB
+*
+* Objective:      CMPEN 472 Midterm 2, in-class-room demonstration
+*                 program
+*
+* Revision:       V3.2  for CodeWarrior 5.2 Debugger Simulation
+*
+* Date:	          OCT. 24, 2022
+*
+* Programmer:     Yuxuan Xu
+*
+* Company:        The Pennsylvania State University
+*                 Department of Computer Science and Engineering
+*
+* Program:        Simple SCI Serial Port I/O and Demonstration
+*                 Typewriter program and 7-Segment display, at PORTB
+*                 
+*
+* Algorithm:      Simple Serial I/O use, typewriter
+*
+* Register use:	  A: Serial port data
+*                 X,Y: Delay loop counters
+*
+* Memory use:     RAM Locations from $3000 for data, 
+*                 RAM Locations from $3100 for program
+*
+* Output:         
+*                 PORTB bit 7 to bit 4, 7-segment MSB
+*                 PORTB bit 3 to bit 0, 7-segment LSB
+*
+* Observation:    This is a typewriter program that displays ASCII
+*                 data on PORTB - 7-segment displays.
+*
+***********************************************************************
+* Parameter Declearation Section
+*
+* Export Symbols
+            XDEF        pstart       ; export 'pstart' symbol
+            ABSENTRY    pstart       ; for assembly entry point
+  
+* Symbols and Macros
+PORTB       EQU         $0001        ; i/o port B addresses
+DDRB        EQU         $0003
+
+SCIBDH      EQU         $00C8        ; Serial port (SCI) Baud Register H
+SCIBDL      EQU         $00C9        ; Serial port (SCI) Baud Register L
+SCICR2      EQU         $00CB        ; Serial port (SCI) Control Register 2
+SCISR1      EQU         $00CC        ; Serial port (SCI) Status Register 1
+SCIDRL      EQU         $00CF        ; Serial port (SCI) Data Register
+
+
+
+CR          equ         $0d          ; carriage return, ASCII 'Return' key
+LF          equ         $0a          ; line feed, ASCII 'next line' character
+L           equ         $4c
+Q           equ         $51
+F           equ         $46
+command     equ         $3E
+esign       equ         $3D
+
+***********************************************************************
+* Data Section: address used [ $3000 to $30FF ] RAM memory
+*
+            ORG         $3000        ; Reserved RAM memory starting address 
+                                     ;   for Data for CMPEN 472 class
+Counter1    DC.B        $4       ; X register count number for time delay
+                                     ;   inner loop for msec
+;****************************
+CCount      DS.B        1
+Buff        DS.B        10 
+;ADDRCT      DS.B        1 
+;lcount      DS.B        1
+;****************************
+num1p4      DS.B        4
+sign        DS.B        1
+num2p4      DS.B        4
+num1ct      DS.B        1
+num2ct      DS.B        1
+;****************************
+num1        DS.B        2
+num2        DS.B        2
+;****************************
+equal       DS.B        1
+negs        DS.B        1
+ans         DS.B        2
+ansp4       DS.B        4
+n1b         DS.B        2
+n2b         DS.B        2
+Counter2    DC.B        $4
+;*****this is calculation for adding decimal***********
+cal1         DS.B        $4
+cal2         DS.B        $4
+cal3         DS.B        $4
+cal4         DS.B        $4
+cal5         DS.B        $4
+
+
+
+;****************message*******************************
+msgme       DC.B         'MENU',$00                                   
+msgst       DC.B        'You may type below', $00
+ERROR       DC.B        'invaild input', $00
+exitmsg     DC.B        'menu exit',$00
+header      DC.B        'Ecalc',$00
+        
+msg1        DC.B         'S: Show the contents of memory location in word', $00
+msg2        DC.B         'W: Write the data word to memory location', $00
+msg3        DC.B         'QUIT:quit', $00       
+
+; Each message ends with $00 (NULL ASCII character) for your program.
+;
+; There are 256 bytes from $3000 to $3100.  If you need more bytes for
+; your messages, you can put more messages 'msg3' and 'msg4' at the end of 
+; the program - before the last "END" line.
+                                     ; Remaining data memory space for stack,
+                                     ;   up to program memory start
+
+*
+***********************************************************************
+* Program Section: address used [ $3200 to $3FFF ] RAM memory
+*
+            ORG        $3200        ; Program start address, in RAM
+pstart      LDS        #$3200       ; initialize the stack pointer
+
+            LDAA       #%11111111   ; Set PORTB bit 0,1,2,3,4,5,6,7
+            STAA       DDRB         ; as output
+
+            LDAA       #%00000000
+            STAA       PORTB        ; clear all bits of PORTB
+
+
+            ldaa       #$0C         ; Enable SCI port Tx and Rx units
+            staa       SCICR2       ; disable SCI interrupts
+
+
+            
+            ldd        #$0001       ; Set SCI Baud Register = $0001 => 1.5M baud at 24MHz (for simulation
+            std        SCIBDH       ; SCI port baud rate change
+            
+
+;****************beginning******************                      
+            JSR        headmsg             
+            LDAA       #CR                ; move the cursor to beginning of the line
+            JSR        putchar            ;   Cariage Return/Enter key
+            LDAA       #LF                ; move the cursor to next line, Line Feed
+            JSR        putchar
+;**************main program******************* 
+pgstart     JSR        headmsg        
+            LDX        #Buff           ;Load pointer to Buff
+            CLR        CCount          ;clear CCounter
+                        
+
+mainloop    
+            JSR        getchar
+            CMPA       #$00
+            BEQ        mainloop
+            
+            JSR        putchar
+            STAA       1,x+
+            INC        CCount
+            
+            LDAB       CCount
+            CMPB       #10
+            BGE        ERRORout 
+            
+            CMPA       #CR
+            BNE        mainloop   
+            
+            
+            JSR        str0          ;reserve 00 for both position in num1 and num2 buff
+            JSR        getnum1p4     ;get num1 in 4 digit
+            JSR        getnum2p4     ;get num2 in 4 digit
+            JSR        MULTnum1      ;combine into exact decimal for number1
+            JSR        MULTnum2      ;combine into exact decimal for number2
+            JSR        OP_CALC       ;do opreation
+            JSR        printequ      ;print what is being typing and the equal sign
+            JSR        printans      ;print answer
+            
+            
+            
+
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+            
+done        bra       done
+            
+
+
+
+
+
+;*********error message print***********************************************
+
+ERRORout    LDAA       #CR                ; move the cursor to beginning of the line
+            JSR        putchar            ;   Cariage Return/Enter key
+            LDAA       #LF                ; move the cursor to next line, Line Feed
+            JSR        putchar
+            LDX       #ERROR 
+            JSR       printmsg
+            LDAA       #CR                ; move the cursor to beginning of the line
+            JSR        putchar            ;   Cariage Return/Enter key
+            LDAA       #LF                ; move the cursor to next line, Line Feed
+            JSR        putchar
+            BRA       pgstart
+            
+
+
+              
+
+            
+                        
+
+;subroutine section below
+
+;***********printmsg***************************
+;* Program: Output character string to SCI port, print message
+;* Input:   Register X points to ASCII characters in memory
+;* Output:  message printed on the terminal connected to SCI port
+;* 
+;* Registers modified: CCR
+;2* Algorithm:
+;     Pick up 1 byte from memory where X register is pointing
+;     Send it out to SCI port
+;     Update X register to point to the next byte
+;     Repeat until the byte data $00 is encountered
+;       (String is terminated with NULL=$00)
+;**********************************************
+NULL           EQU    $00
+printmsg       PSHA                   ;Save registers
+               PSHX
+printmsgloop   LDAA    1,X+           ;pick up an ASCII character from string
+                                       ;   pointed by X register
+                                       ;then update the X register to point to
+                                       ;   the next byte
+               CMPA    #NULL
+               BEQ     printmsgdone   ;end of strint yet?
+               JSR     putchar        ;if not, print character and do next
+               BRA     printmsgloop
+
+printmsgdone   PULX 
+               PULA
+               RTS
+;***********end of printmsg********************
+
+;**********************************Ecalcmsg********************************
+headmsg     PSHX
+            PSHA
+
+            LDX     #header
+            JSR     printmsg
+            
+            ldaa  #command
+            jsr   putchar
+
+            
+            PULA  
+            PULX
+            RTS
+            
+            
+            
+            
+;**********************************getnumber1p4********************************
+; this is doing what the aid in the hw7 page and go through the buffer to check num1
+;and intial the counter to count for the digit for num1 until it see a opreation sign
+;
+;
+;
+
+getnum1p4   PSHX
+            PSHA
+            PSHB
+            PSHY
+
+            CLR     num1ct
+            LDX     #Buff
+
+checknum    
+            LDAA    1,x+
+            
+            CMPA    #$30
+            BLO     strnum
+            CMPA    #$39
+            LBGT     ERRORout
+            INC     num1ct
+            LDAB    num1ct
+            CMPB    #4
+            LBGT    ERRORout
+            BRA     checknum
+            
+            
+strnum      STAA    sign
+            STX     n1b           ;n1b is to store the address of the position of opreation sign in Buff
+            LDX     n1b
+            LDY     #num1p4+3
+            LDAA    1,-x
+    
+strlp1      LDAB    num1ct
+            CMPB    #$0
+            BEQ     getdone
+            LDAA    1,-x
+            SUBA    #$30
+            STAA    1,y-
+            DEC     num1ct 
+            BRA     strlp1 
+
+            
+            
+getdone     PULY
+            PULB 
+            PULA
+            PULX 
+            
+            RTS     
+            
+;**********************************getnumber2p4********************************
+ ; this is doing what the aid in the hw7 page and go through the buffer to check num2
+;and intial the counter to count for the digit for num1 until it see a enter sign
+getnum2p4   PSHX
+            PSHA
+            PSHB
+            PSHY
+
+            CLR     num2ct
+            LDX     n1b
+
+checknum2    
+            LDAA    1,x+
+            CMPA    #$39             ;check if input in num2 is not a number
+            LBGT     ERRORout
+            CMPA    #$30
+            BLO     strnum2
+            INC     num2ct
+            LDAB    num2ct
+            CMPB    #4
+            LBGT     ERRORout
+            BRA     checknum2
+            
+            
+strnum2      
+            STX     n2b           ;n2b is to store the address of the position of enter key in Buff
+            LDX     n2b
+            LDY     #num2p4+3
+            LDAA    1,-x
+    
+strlp2      LDAB    num2ct
+            CMPB    #$0
+            BEQ     getdone1
+            LDAA    1,-x
+            SUBA    #$30
+            STAA    1,y-
+            DEC     num2ct 
+            BRA     strlp2 
+
+            
+            
+getdone1    PULY
+            PULB 
+            PULA
+            PULX 
+            
+            RTS     
+;***************putchar************************
+;* Program: Send one character to SCI port, terminal
+;* Input:   Accumulator A contains an ASCII character, 8bit
+;* Output:  Send one character to SCI port, terminal
+;* Registers modified: CCR
+;* Algorithm:
+;    Wait for transmit buffer become empty
+;      Transmit buffer empty is indicated by TDRE bit
+;      TDRE = 1 : empty - Transmit Data Register Empty, ready to transmit
+;      TDRE = 0 : not empty, transmission in progress
+;**********************************************
+putchar        BRCLR SCISR1,#%10000000,putchar   ; wait for transmit buffer empty
+               STAA  SCIDRL                      ; send a character
+               RTS
+;***************end of putchar*****************
+
+
+;****************getchar***********************
+;* Program: Input one character from SCI port (terminal/keyboard)
+;*             if a character is received, other wise return NULL
+;* Input:   none    
+;* Output:  Accumulator A containing the received ASCII character
+;*          if a character is received.
+;*          Otherwise Accumulator A will contain a NULL character, $00.
+;* Registers modified: CCR
+;* Algorithm:
+;    Check for receive buffer become full
+;      Receive buffer full is indicated by RDRF bit
+;      RDRF = 1 : full - Receive Data Register Full, 1 byte received
+;      RDRF = 0 : not full, 0 byte received
+;**********************************************
+
+
+getchar        BRCLR SCISR1,#%00100000,getchar7
+               LDAA  SCIDRL
+               RTS
+getchar7       CLRA
+               RTS
+;****************end of getchar**************** 
+
+
+
+;******************MULTPICATION to get number 1***********************
+;* Program:  this is take all the digit in num1p4 and then
+;use the largest bit *1000 and second digit *100 and so and so far 
+;and then add then together to get the actuall number1 in decimal
+;*           
+
+MULTnum1       PSHY
+               PSHX
+               PSHA
+               PSHB
+               
+               
+kup            ;LDX       #cal
+               CLRA
+               LDAB      num1p4
+               LDY       #$3E8
+               EMUL
+               
+               STD       cal1
+               
+hup            CLRA 
+               LDAB      num1p4+1
+               LDY       #$64
+               EMUL    
+               STD       cal2
+               
+               
+               CLRA
+               LDAB      num1p4+2
+               LDY       #$0A
+               EMUL
+               ADDB      num1p4+3
+               STAB      cal3+1
+               
+               ;JSR       div_op
+                
+               LDD       cal1
+               ADDD      cal2
+               STD       cal4
+               LDD       cal4
+               ADDD      cal3
+               STD       num1         ;store the final number
+               
+               PULB
+               PULA
+               PULX
+               PULY
+               
+               
+               RTS
+               
+               
+  
+;****************end of getchar**************** 
+
+;******************MULTPICATION to get number  2***********************
+;* Program:  this is take all the digit in num2p4 and then
+;use the largest bit *1000 and second digit *100 and so and so far 
+;and then add then together to get the actuall number2 in decimal
+;*           
+        
+
+MULTnum2       PSHY
+               PSHX
+               PSHA
+               PSHB
+               
+                
+               CLRA
+               LDAB      num2p4
+               LDY       #$3E8
+               EMUL
+               
+               STD       cal1
+               
+hup1            CLRA 
+               LDAB      num2p4+1
+               LDY       #$64
+               EMUL    
+               STD       cal2
+               
+               
+               CLRA
+               LDAB      num2p4+2
+               LDY       #$0A
+               EMUL
+               ADDB      num2p4+3
+               STAB      cal3+1
+               
+               ;JSR       div_op
+              ;adding all of them together and return to answer  
+               LDD       cal1
+               ADDD      cal2
+               STD       cal4
+               LDD       cal4
+               ADDD      cal3
+               STD       num2         ;store the final number
+               
+               PULB
+               PULA
+               PULX
+               PULY
+               
+               
+               RTS
+               
+  
+;****************end of getchar**************** 
+
+
+;******************op-cal**************************
+;this is takeing the op sign we store before and then check for
+;which opreation sign it is.
+OP_CALC         PSHA
+                ;LDAA    #$00
+                ;STAA    ERR_FLG
+                LDAA    sign
+                CMPA    #'+'
+                BEQ     ADD_OP
+                CMPA    #'-'
+                BEQ     SUB_OP
+                CMPA    #'*'
+                BEQ     MUL_OP
+                CMPA    #'/'
+                BEQ     DIV_OP
+                ;if none of them, error
+                LBRA     ERRORout
+                
+                
+ADD_OP          JSR     ADD_OPS
+                BRA     OP_DONE
+SUB_OP          JSR     SUB_OPS
+                BRA     OP_DONE
+MUL_OP          JSR     MUL_OPS
+                BRA     OP_DONE
+DIV_OP          JSR     DIV_OPS
+OP_DONE         PULA
+                RTS
+;*****************multop************************
+;mutiple two number with EMUL
+MUL_OPS         PSHD
+                PSHY
+                LDD     num1
+                LDY     num2
+                EMUL
+                STD     ans
+                CPY     #0
+                BEQ     MUL_DONE
+M_ERR_YES       JSR     ERRORout
+MUL_DONE        PULY
+                PULD
+                RTS
+                
+                
+                
+;****************DIVop************************
+;Div using IDIV and always check for num2 whether or not is 0
+;if yes, error
+DIV_OPS         PSHD
+                PSHY
+                PSHX
+                LDD     num1
+                LDX     num2
+                CPX     #0
+                LBEQ    ERRORout
+                IDIV
+                STX     ans
+;M_ERR_YES       JSR     #ERROR
+                PULX
+                PULY
+                PULD
+                RTS
+;****************subop****************************
+;subtract with using subd, if is negetive number 
+;then filp the number and then do subtraction again and
+;store the answer
+
+SUB_OPS         PSHD
+                PSHY
+                LDD     num1
+                SUBD    num2
+                BMI     negetive
+                STD     ans
+                BRA     subdone
+;if negetive                
+negetive        LDD     num2
+                SUBD    num1
+                STD     ans  
+                ;print a negetive sign 
+                LDAA    #$2D
+                STAA    negs             
+;M_ERR_YES       JSR     #ERROR
+subdone         PULY
+                PULD
+                RTS
+
+
+ ;*********************************************
+ 
+ADD_OPS         PSHD
+                PSHY
+                LDD     num1
+                ADDD    num2
+                STD     ans
+;M_ERR_YES       JSR     #ERROR
+                PULY
+                PULD
+                RTS
+
+;**********************printans*******************
+;this will print the answer only
+printans       PSHY
+               PSHD
+               PSHX
+               
+               LDY    #ansp4+2
+               LDAA   Counter1
+               
+               
+loop           LDD    ans
+               LDX    #$0A
+               IDIV   
+               STX    ans
+               STD    1,Y-
+               
+               
+               dec    Counter1
+               BNE    loop      
+              
+               
+               LDAB   Counter2
+               LDY    #ansp4
+               LDX    #ansp4
+               
+               
+ansloop        LDAA   1,y+
+               ADDA   #$30
+               STAA   1,x+
+               JSR    putchar
+               
+               dec    Counter2 
+               BNE    ansloop 
+               
+ 
+               PULY
+               PULD
+               PULX
+               
+               RTS          
+                
+;****************reserve $00********************
+;reserve 00 for num1p4 and num2p4 just in case the
+;number is less then 4 digit
+str0           PSHA
+               PSHB
+               LDAA    #$00
+               STAA    num1p4
+               STAA    num1p4+1
+               STAA    num1p4+2
+               STAA    num1p4+3
+               
+               LDAB    #$00
+               STAB    num2p4
+               STAB    num2p4+1
+               STAB    num2p4+2
+               STAB    num2p4+3
+               
+               PULB
+               PULA
+               
+               RTS
+           
+           
+;***********************print =*******************8
+;print the equation
+printequ       PSHX
+               PSHA
+               PSHB
+               LDX    #Buff
+lp2            LDAA   1,x+
+               JSR    putchar                
+               CMPA   #CR
+               BNE    lp2
+              
+               LDAA   #esign
+               JSR    putchar
+               LDAA   negs
+               JSR    putchar
+               
+               PULB
+               PULA
+               PULX
+               
+               RTS
+              
+
+***************************************************************************************
+;delayMS subroutine
+;
+;This subrouting cause few msec.delay
+;
+;Input: a 16bit count number in 'Counter1'
+;Output: time delay, cpu cycle waisted
+;Registers in use: X register, as counter
+;Memory locations in use: a 16 bit input number at 'Counter1'
+;
+;Comments: ONe can add more NOP instruction to legthen the delay time.
+;
+delayMS
+		PSHX				                    ;save X
+		LDX	   	Counter1              	;short delay
+
+dlyMSLoop	NOP				                      ;total time delay=X*NOP
+		DEX
+		BNE	  	dlyMSLoop
+
+		PULX			                    	;restore X
+		RTS			                       	;return
+
+
+
+               END               ; this is end of assembly source file
+                                 ; lines below are ignored - not assembled/compiled
+
+
+
